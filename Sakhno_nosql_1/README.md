@@ -257,7 +257,19 @@ The field order follows the Equality-Sort-Range (ESR) guideline as a design star
 - `popularity` is the requested descending sort field;
 - `audio_features.danceability` is a range condition.
 
-Before the index is created, the query may require a collection scan (`COLLSCAN`) and a separate sort stage. After the index is created, MongoDB may be able to use an index scan (`IXSCAN`) and satisfy the sort from index order. The actual plan is chosen by the query optimizer and must be confirmed from the output of `explain("executionStats")`.
+The actual Atlas execution confirmed the expected plan change:
+
+| Metric | Before index | After index |
+|---|---:|---:|
+| Winning plan | `SORT` + `COLLSCAN` | `FETCH` + `IXSCAN` |
+| Execution time | 121 ms | 3 ms |
+| `totalKeysExamined` | 0 | 412 |
+| `totalDocsExamined` | 113,999 | 354 |
+| `nReturned` | 354 | 354 |
+
+The index reduced the number of documents examined from the entire 113,999-document collection to 354 matching documents. The measured execution time fell from 121 ms to 3 ms (about 40 times faster in this run). The separate `SORT` stage disappeared because the compound index provides the requested `popularity: -1` ordering. The winning plan still contains `FETCH`, because MongoDB must retrieve the full documents rather than return all requested data from the index alone.
+
+These are measured values from the user's MongoDB Atlas execution (MongoDB 8.0.39); execution times can vary between runs and environments.
 
 Useful fields in the explain output:
 
@@ -296,7 +308,7 @@ db.tracks.find({
 }).explain("executionStats");
 ```
 
-The presence of an index does not guarantee that MongoDB will choose it for every query. Confirm the selected plan and execution statistics rather than assuming index usage.
+The actual Atlas execution selected `FETCH` over `IXSCAN` using `ix_background_work`. It returned 16,141 documents, examined 16,602 index keys and 16,141 documents, and reported an execution time of 35 ms. This confirms that the compound index was used to narrow the search. `FETCH` remains necessary because the query returns complete documents. A before-index execution was not captured for this second query, so no measured before/after speedup is claimed.
 
 ### 7.3. Task 3 — Is the query covered?
 
@@ -343,7 +355,7 @@ mongosh "<YOUR_MONGO_URI>" --file scripts/03_indexes_optional.js
 
 The script prints the execution plan for Task 1 before index creation, creates the Task 1 compound index, and prints the plan again. It also creates the background-work compound index and prints the execution plan for that query.
 
-For a complete experimental report, save the actual `explain("executionStats")` output for both queries before and after index creation and record the observed `winningPlan`, `totalKeysExamined`, `totalDocsExamined`, and `nReturned`. The values should be taken from the real Atlas execution, not estimated or copied from an example.
+The script was executed successfully against MongoDB Atlas 8.0.39. Actual execution statistics for Task 1 before and after index creation, and for Task 2 after index creation, are documented above. Task 2's before-index baseline was not captured. The separate covered-query example above is a conceptual answer; its `explain()` output was not captured as part of this run.
 
 ## 8. Execution summary
 
@@ -352,8 +364,9 @@ For a complete experimental report, save the actual `explain("executionStats")` 
 | CSV import | `spotify.tracks_raw` | **113,999 documents loaded** |
 | Aggregation transformation | `spotify.tracks` | **113,999 documents created** |
 | Part 2 analytical queries | `spotify.tracks` | **Four query sections executed** |
-| Part 3 indexes | `spotify.tracks` | Optional experiment; run and capture `explain()` output if including measured results |
-| Covered-query analysis | Task 3.3 | **Answered: original query is not covered** |
+| Part 3, Task 1 | `spotify.tracks` | **Executed; index use and before/after statistics captured** |
+| Part 3, Task 2 | `spotify.tracks` | **Executed; compound index use and execution statistics captured** |
+| Covered-query analysis | Task 3.3 | **Answered conceptually: original query is not covered; projected variant can be covered** |
 
 ## 9. Reproducibility notes
 
